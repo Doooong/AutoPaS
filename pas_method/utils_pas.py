@@ -155,6 +155,8 @@ class ShapeProp:
                 kwargs = load_arg(node.kwargs)
                 result = getattr(self_obj, node.target)(*args, **kwargs)
             elif node.op == 'call_module':
+                # import pdb; pdb.set_trace()
+                print(node.name)
                 result = self.modules[node.target](*load_arg(node.args), **load_arg(node.kwargs))
 
             # This is the only code specific to shape propagation.
@@ -202,12 +204,12 @@ def add_binary_model(model, bn_names, input_shape=None):
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
+        # if ('relu' in node.name and 'relu' in node.target) or ('relu' in node.name and node.op == 'call_function'):
+        # if ('relu' in node.name) and (
+        #         node.op == 'call_function' or node.op == 'call_module') and 'pool' not in node.next.name:
+        # import pdb; pdb.set_trace()
         if ('relu' in node.name) and 'pool' not in node.next.name:
             node_list_relu.append(node)
-        # if ('relu' in node.name and 'relu' in node.target) or ('relu' in node.name and node.op == 'call_function'):
-        # if (is_activate(node, activate_names)) and (
-        #         node.op == 'call_function' or node.op == 'call_module') and 'pool' not in node.next.name:
-        #     node_list_relu.append(node)
             # node_list_activate.append(node)
             # node_list_names.append(node.name)
     print("node_list_relu", node_list_relu)
@@ -242,6 +244,7 @@ def add_binary_model(model, bn_names, input_shape=None):
             if find_group_conv(model, node_input):
                 node_list_relu.remove(node)
     for node in node_list_relu:
+        # import pdb;pdb.set_trace()
         try:
             inplanes = node.shape[1]
         except Exception as e:
@@ -252,6 +255,7 @@ def add_binary_model(model, bn_names, input_shape=None):
             #     bn_names.append(node.prev.prev.name)
             bn_names.append(node.prev.name)
         with fx_model.graph.inserting_after(node):
+
             relu_scaled_list.append(ScaledConv2D(inplanes))
             fx_model.add_submodule(f'relu_scaled_{i}', relu_scaled_list[i])
             new_node = fx_model.graph.call_module(f'relu_scaled_{i}', node.args, {})
@@ -281,7 +285,7 @@ def add_binary_model(model, bn_names, input_shape=None):
 
 if __name__ == "__main__":
     from torchvision.models import resnet50
-    from co_lib.co_lib.pruning.ptflops import get_flops_model
+    # from co_lib.co_lib.pruning.ptflops import get_flops_model
 
     model = resnet50(pretrained=False)
     # model.eval()
