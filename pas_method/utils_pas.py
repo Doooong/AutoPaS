@@ -99,10 +99,13 @@ class BinaryConv2d(nn.Conv2d):
 class ScaledConv2D(nn.Module):
     def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
-        if node.op == 'call_function':
-            self.act = getattr(F, node.name.split("_")[0])
-        else:
-            self.act = getattr(F, node.target)
+        # if node.op == 'call_function':
+        #     self.act = getattr(F, node)
+        # elif node.op == "call_module":
+        #     self.act = getattr(F, node.name.split("_")[-1])
+        # else:
+        #     self.act = getattr(F, node.target)
+        self.act = getattr(F, node)
         self.scale0 = BinaryConv2d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
 
     def forward(self, x):
@@ -185,27 +188,62 @@ def add_binary_model(model, bn_names, input_shape=None):
     relu_scaled_list = nn.ModuleList()
     node_list_add = []
 
-    node_list_activate = []
+    node_list_activate = {}
     node_list_names = []
 
-    def is_activate(node):
+    def find_activate(nodes, activate_names):
+        op_name = ''
+        for node in nodes:
+            confirm = 0
+            if node.op == 'call_method':
+                if node.target in activate_names:
+                    confirm += 1
+                    op_name = node.target
+            else:
+                if node.name.split('_')[0] in activate_names:
+                    confirm += 1
+                    op_name = node.name.split('_')[0]
+        return op_name
+
+    def is_suitable(node):
+        external_names = ['conv', 'bn', 'pool', 'classifier']
+        for name in external_names:
+            if name in node.name:
+                return False
+        return True
+
+    def is_activate(model, node, node_list_activate):
         activate_names = ['relu', 'sigmoid']
+
         if node.op == 'call_method':
             if node.target in activate_names:
-                return True
-            else:
+                node_list_activate[node] = node.target
+        elif node.op == "call_module":
+            if not is_suitable(node):
                 return False
+            if len(node.name.split('_')) == 3:
+                names = node.name.split('_')
+                sub_module = getattr(getattr(model, names[0])[int(names[1])], names[2])
+            elif len(node.name.split('_')) > 3:
+                return False
+            else:
+                sub_module = getattr(model, node.name)
+            try:
+                nodes = fx.symbolic_trace(sub_module).graph.nodes
+                op_name = find_activate(nodes, activate_names)
+                if op_name != '':
+                    node_list_activate[node] = op_name
+            except Exception as e:
+                pass
         else:
             if node.name.split('_')[0] in activate_names:
-                return True
-            else:
-                return False
+                node_list_activate[node] = node.name.split("_")[0]
 
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
-        if is_activate(node) and 'pool' not in node.next.name:
-            node_list_activate.append(node)
+        if 'pool' not in node.next.name:
+            is_activate(model, node, node_list_activate)
 
     def find_group_conv(model, node_input):
         node_name = node_input.prev.name
@@ -221,18 +259,23 @@ def add_binary_model(model, bn_names, input_shape=None):
         else:
             return False
 
+    def find_node_name(node, name):
+        if name in node.prev.name:
+            return node.prev.name
+        return find_node_name(node.prev, name)
+
     for node in node_list_add:
         # 判断要替换的node节点在不在node.add的历史记录里
         for node_input in node.all_input_nodes:
             if node_input in node_list_activate:
-                node_list_activate.remove(node_input)
+                node_list_activate.pop(node_input)
+        if node.next in node_list_activate:
+            node_list_activate.pop(node.next)
     # 判读激活函数前的节点是否是group_conv，如果是则剔除
-    for node in node_list_activate:
+    for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            if 'bn' not in node_input.name:
-                continue
             if find_group_conv(model, node_input):
-                node_list_activate.remove(node)
+                del node_list_activate[node]
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
     for node in node_list_activate:
@@ -241,13 +284,11 @@ def add_binary_model(model, bn_names, input_shape=None):
             inplanes = node.shape[1]
         except Exception as e:
             inplanes = node.prev.shape[1]
-        if 'bn' not in node.prev.name:
-            continue
-        else:
-            bn_names.append(node.prev.name)
+        rm_name = find_node_name(node, 'conv')
+        bn_names.append(rm_name)
         active_name = node.name.split('_')[0]
         with fx_model.graph.inserting_after(node):
-            relu_scaled_list.append(ScaledConv2D(inplanes, node))
+            relu_scaled_list.append(ScaledConv2D(inplanes, node_list_activate[node]))
             fx_model.add_submodule(f'{active_name}_scaled_{i}', relu_scaled_list[i])
             new_node = fx_model.graph.call_module(f'{active_name}_scaled_{i}', node.args, {})
             node.replace_all_uses_with(new_node)
