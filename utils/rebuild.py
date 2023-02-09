@@ -43,9 +43,9 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
         bn_op = get_model_op(ori_model, remove_name[name])
         # tp.prune_conv_out_channels(getattr(net, name), idxs=idxes[i])
         # import pdb; pdb.set_trace()
-        if prune_op.weight.shape[1] == len(idxes[i]):
+        if prune_op.weight.shape[0] == len(idxes[i]):
             # print(prune_op)
-            # import pdb;pdb.set_trace()
+            import pdb;pdb.set_trace()
             prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
             bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
             bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
