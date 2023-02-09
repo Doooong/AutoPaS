@@ -186,15 +186,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     activate_names = ['relu', 'sigmoid']
     node_list_activate = []
     node_list_names = []
-    # for node in fx_model.graph.nodes:
-    #     # if ('relu' in node.name and 'relu' in node.target) or ('relu' in node.name and node.op == 'call_function'):
-    #     if 'relu' in node.name and node.op == 'call_function':
-    #         with fx_model.graph.inserting_after(node):
-    #             new_node = fx_model.graph.call_method(node.name, node.args, node.kwargs, torch.nn.ReLU)
-    #             node.replace_all_uses_with(new_node)
-    #         fx_model.graph.erase_node(node)
-    # fx_model.graph.lint()
-    # fx_model.recompile()
     def is_activate(node, activate_names):
         for name in activate_names:
             if name in node.name:
@@ -204,18 +195,10 @@ def add_binary_model(model, bn_names, input_shape=None):
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
-        # if ('relu' in node.name and 'relu' in node.target) or ('relu' in node.name and node.op == 'call_function'):
-        # if ('relu' in node.name) and (
-        #         node.op == 'call_function' or node.op == 'call_module') and 'pool' not in node.next.name:
-        # import pdb; pdb.set_trace()
         if ('relu' in node.name) and 'pool' not in node.next.name:
             node_list_relu.append(node)
-            # node_list_activate.append(node)
-            # node_list_names.append(node.name)
     print("node_list_relu", node_list_relu)
 
-    # if 'relu' in node.name and 'relu' in node.target and 'pool' not in node.next.name:
-    #     node_list_relu.append(node)
 
     def find_group_conv(model, node_input):
         node_name = node_input.prev.name
@@ -266,21 +249,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     fx_model.graph.lint()
     fx_model.recompile()
     return fx_model, bn_names
-    # for node in fx_model.graph.nodes:
-    #     if node.op == "call_module" and 'relu' in node.target and node.target not in visited:
-    #         inplanes = node.shape[1]
-    #         # node_list_relu.append(node)
-    #         with fx_model.graph.inserting_after(node):
-    #             relu_scaled_list.append(ScaledConv2D(inplanes))
-    #             fx_model.add_submodule(f'relu_scaled_{i}', relu_scaled_list[i])
-    #             new_node = fx_model.graph.call_module(f'relu_scaled_{i}', node.args, node.kwargs)
-    #             node.replace_all_uses_with(new_node)
-    #             visited.add(f'relu_scaled_{i}')
-    #             i += 1
-    #         fx_model.graph.erase_node(node)
-    # fx_model.graph.lint()
-    # fx_model.recompile()
-    # return fx_model
 
 
 if __name__ == "__main__":

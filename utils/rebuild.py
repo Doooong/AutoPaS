@@ -23,7 +23,7 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
             # import pdb; pdb.set_trace()
             weight = module.weight.detach().cpu().numpy() - residual.detach().cpu().numpy()
             idxes.append(np.where(weight < 0.5)[0].tolist())
-            print(f"{weight.shape[0]} - > {len(np.where(weight < 0.5)[0].tolist())}")
+            print(f"{weight.shape[0]} - > {weight.shape[0] - len(np.where(weight < 0.5)[0].tolist())}")
     return remove_name, idxes
 
 
@@ -45,7 +45,7 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
         # import pdb; pdb.set_trace()
         if prune_op.weight.shape[1] == len(idxes[i]):
             # print(prune_op)
-            import pdb;pdb.set_trace()
+            # import pdb;pdb.set_trace()
             prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
             bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
             bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
