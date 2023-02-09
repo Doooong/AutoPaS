@@ -6,13 +6,19 @@ import torch_pruning as tp
 import torch
 
 
+def find_bn_name(node):
+    if 'bn' in node.next.name:
+        return node.next.name
+    return ''
+
+
 def get_rm_names(dbc_model, dbc_weights, bn_names):
     remove_name = {}
     fx_model = fx.symbolic_trace(dbc_model)
     for node in fx_model.graph.nodes:
         if node.name in bn_names:
             # remove_name.append(node.prev.name)
-            remove_name[node.prev.name] = node.name
+            remove_name[node.name] = find_bn_name(node)
     idxes = []
     dbc_model.load_state_dict(dbc_weights)
     for name, module in dbc_model.named_modules():
@@ -34,23 +40,15 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
     example_input = torch.randn(tuple(input_shape)).to('cuda')
     DG.build_dependency(ori_model.eval(), example_inputs=example_input)
     for i, name in enumerate(remove_name.keys()):
-        # if len(name.split('_')) == 3:
-        #     layer_name, index, conv_name = name.split('_')
-        #     prune_op = getattr(getattr(ori_model, layer_name)[int(index)], conv_name)
-        # else:
-        #     prune_op = getattr(ori_model, name)
         prune_op = get_model_op(ori_model, name)
         bn_op = get_model_op(ori_model, remove_name[name])
-        # tp.prune_conv_out_channels(getattr(net, name), idxs=idxes[i])
-        # import pdb; pdb.set_trace()
         if prune_op.weight.shape[0] == len(idxes[i]):
-            # print(prune_op)
-            import pdb;pdb.set_trace()
             prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
-            bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
-            bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
-            bn_op.running_var.data = torch.zeros_like(bn_op.running_var.data).to(bn_op.running_var.data.device)
-            bn_op.bias.data = torch.zeros_like(bn_op.bias.data).to(bn_op.bias.data.device)
+            if bn_op:
+                bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
+                bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
+                bn_op.running_var.data = torch.zeros_like(bn_op.running_var.data).to(bn_op.running_var.data.device)
+                bn_op.bias.data = torch.zeros_like(bn_op.bias.data).to(bn_op.bias.data.device)
             continue
         pruning_group = DG.get_pruning_group(prune_op,
                                              tp.prune_conv_out_channels, idxs=idxes[i])
@@ -61,6 +59,8 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
 
 
 def get_model_op(model, name):
+    if name == '':
+        return None
     if len(name.split('_')) == 3:
         layer_name, index, conv_name = name.split('_')
         op = getattr(getattr(model, layer_name)[int(index)], conv_name)
