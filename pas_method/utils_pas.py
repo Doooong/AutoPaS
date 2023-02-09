@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import torch.fx as fx
 from typing import Any, Callable, Dict, Optional, Tuple
 from torch.fx.node import Node
-
+from .rebuild import get_model_op
 
 # from torchvision.models.feature_extraction import get_graph_node_names
 # from torchvision.models.feature_extraction import create_feature_extractor
@@ -175,7 +175,6 @@ class ShapeProp:
 
         return load_arg(self.graph)
 
-
 def add_binary_model(model, bn_names, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
@@ -206,14 +205,14 @@ def add_binary_model(model, bn_names, input_shape=None):
         return op_name
 
     def is_suitable(node):
-        external_names = ['conv', 'bn', 'pool', 'classifier']
+        external_names = ['conv', 'bn', 'pool', 'classifier', 'drop']
         for name in external_names:
-            if name in node.name:
+            if name in node.name and 'act' not in node.name:
                 return False
         return True
 
     def is_activate(model, node, node_list_activate):
-        activate_names = ['relu', 'sigmoid']
+        activate_names = ['relu', 'sigmoid', 'silu']
 
         if node.op == 'call_method':
             if node.target in activate_names:
@@ -221,13 +220,14 @@ def add_binary_model(model, bn_names, input_shape=None):
         elif node.op == "call_module":
             if not is_suitable(node):
                 return False
-            if len(node.name.split('_')) == 3:
-                names = node.name.split('_')
-                sub_module = getattr(getattr(model, names[0])[int(names[1])], names[2])
-            elif len(node.name.split('_')) > 3:
-                return False
-            else:
-                sub_module = getattr(model, node.name)
+            # if len(node.name.split('_')) == 3:
+            #     names = node.name.split('_')
+            #     sub_module = getattr(getattr(model, names[0])[int(names[1])], names[2])
+            # elif len(node.name.split('_')) > 3:
+            #     return False
+            # else:
+            #     sub_module = getattr(model, node.name)
+            sub_module = get_model_op(model, node.name)
             try:
                 nodes = fx.symbolic_trace(sub_module).graph.nodes
                 op_name = find_activate(nodes, activate_names)
