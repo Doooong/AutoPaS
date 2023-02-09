@@ -88,7 +88,7 @@ class PaS:
         sep = torch.split(BNs, length)
         count_layer = 0
         for name, module in self.model.named_modules():
-            if 'relu_scaled' in name and ".scale" in name:
+            if '_scaled' in name and ".scale" in name:
                 module.weight.data = module.weight.data.to(sep[count_layer].device)
                 module.weight.data *= sep[count_layer].reshape(sep[count_layer].size(0), 1, 1, 1)
                 count_layer += 1

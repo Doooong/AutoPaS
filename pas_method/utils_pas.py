@@ -97,14 +97,17 @@ class BinaryConv2d(nn.Conv2d):
 
 
 class ScaledConv2D(nn.Module):
-    def __init__(self, inplanes):
+    def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
-
-        self.relu = nn.ReLU(inplace=True)
+        if node.op == 'call_function':
+            self.act = getattr(F, node.name.split("_")[0])
+        else:
+            self.act = getattr(F, node.target)
         self.scale0 = BinaryConv2d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
 
     def forward(self, x):
-        x = self.relu(x)
+        # x = self.relu(x)
+        x = self.act(x)
         # x = F.relu(self.scale0(x))
         x = self.scale0(x)
 
@@ -156,7 +159,6 @@ class ShapeProp:
                 result = getattr(self_obj, node.target)(*args, **kwargs)
             elif node.op == 'call_module':
                 # import pdb; pdb.set_trace()
-                print(node.name)
                 result = self.modules[node.target](*load_arg(node.args), **load_arg(node.kwargs))
 
             # This is the only code specific to shape propagation.
@@ -182,23 +184,28 @@ def add_binary_model(model, bn_names, input_shape=None):
     ShapeProp(fx_model).propagate(torch.rand(*input_shape, dtype=dtype).to(device))
     relu_scaled_list = nn.ModuleList()
     node_list_add = []
-    node_list_relu = []
-    activate_names = ['relu', 'sigmoid']
+
     node_list_activate = []
     node_list_names = []
-    def is_activate(node, activate_names):
-        for name in activate_names:
-            if name in node.name:
+
+    def is_activate(node):
+        activate_names = ['relu', 'sigmoid']
+        if node.op == 'call_method':
+            if node.target in activate_names:
                 return True
-        return False
+            else:
+                return False
+        else:
+            if node.name.split('_')[0] in activate_names:
+                return True
+            else:
+                return False
 
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
-        if ('relu' in node.name) and 'pool' not in node.next.name:
-            node_list_relu.append(node)
-    print("node_list_relu", node_list_relu)
-
+        if is_activate(node) and 'pool' not in node.next.name:
+            node_list_activate.append(node)
 
     def find_group_conv(model, node_input):
         node_name = node_input.prev.name
@@ -217,16 +224,18 @@ def add_binary_model(model, bn_names, input_shape=None):
     for node in node_list_add:
         # 判断要替换的node节点在不在node.add的历史记录里
         for node_input in node.all_input_nodes:
-            if node_input in node_list_relu:
-                node_list_relu.remove(node_input)
+            if node_input in node_list_activate:
+                node_list_activate.remove(node_input)
     # 判读激活函数前的节点是否是group_conv，如果是则剔除
-    for node in node_list_relu:
+    for node in node_list_activate:
         for node_input in node.all_input_nodes:
             if 'bn' not in node_input.name:
                 continue
             if find_group_conv(model, node_input):
-                node_list_relu.remove(node)
-    for node in node_list_relu:
+                node_list_activate.remove(node)
+    if len(node_list_activate) == 0:
+        print("Not found suitable node in model, which PaS not support!!")
+    for node in node_list_activate:
         # import pdb;pdb.set_trace()
         try:
             inplanes = node.shape[1]
@@ -235,15 +244,14 @@ def add_binary_model(model, bn_names, input_shape=None):
         if 'bn' not in node.prev.name:
             continue
         else:
-            #     bn_names.append(node.prev.prev.name)
             bn_names.append(node.prev.name)
+        active_name = node.name.split('_')[0]
         with fx_model.graph.inserting_after(node):
-
-            relu_scaled_list.append(ScaledConv2D(inplanes))
-            fx_model.add_submodule(f'relu_scaled_{i}', relu_scaled_list[i])
-            new_node = fx_model.graph.call_module(f'relu_scaled_{i}', node.args, {})
+            relu_scaled_list.append(ScaledConv2D(inplanes, node))
+            fx_model.add_submodule(f'{active_name}_scaled_{i}', relu_scaled_list[i])
+            new_node = fx_model.graph.call_module(f'{active_name}_scaled_{i}', node.args, {})
             node.replace_all_uses_with(new_node)
-            visited.add(f'relu_scaled_{i}')
+            visited.add(f'{active_name}_scaled_{i}')
             i += 1
         fx_model.graph.erase_node(node)
     fx_model.graph.lint()
@@ -253,6 +261,7 @@ def add_binary_model(model, bn_names, input_shape=None):
 
 if __name__ == "__main__":
     from torchvision.models import resnet50
+
     # from co_lib.co_lib.pruning.ptflops import get_flops_model
 
     model = resnet50(pretrained=False)
