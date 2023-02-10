@@ -8,25 +8,9 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from torch.fx.node import Node
 from .rebuild import get_model_op
 
+
 # from torchvision.models.feature_extraction import get_graph_node_names
 # from torchvision.models.feature_extraction import create_feature_extractor
-
-def _parent_name(target: str) -> Tuple[str, str]:
-    """
-    Splits a qualname into parent path and last atom.
-    For example, `foo.bar.baz` -> (`foo.bar`, `baz`)
-    """
-    *parent, name = target.rsplit('.', 1)
-    return parent[0] if parent else '', name
-
-
-def replace_node_module(node: fx.Node, modules: Dict[str, Any], new_module: torch.nn.Module):
-    # assert(isinstance(node.target, str))
-    parent_name, name = _parent_name(node.target)
-    modules[node.target] = new_module
-    setattr(modules[parent_name], name, new_module)
-
-    print("replaced {}".format(node.target))
 
 
 class ModulePathTracer(torch.fx.Tracer):
@@ -175,10 +159,27 @@ class ShapeProp:
 
         return load_arg(self.graph)
 
+
+def find_activate(nodes, activate_names):
+    op_name = ''
+    for node in nodes:
+        confirm = 0
+        if node.op == 'call_method':
+            if node.target in activate_names:
+                confirm += 1
+                op_name = node.target
+        else:
+            if node.name.split('_')[0] in activate_names:
+                confirm += 1
+                op_name = node.name.split('_')[0]
+    return op_name
+
+
 def add_binary_model(model, bn_names, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
     fx_model = fx.symbolic_trace(model)
+    ori_model = copy.deepcopy(fx_model)
     i = 0
     visited = set()
     device = next(model.parameters()).device
@@ -188,21 +189,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     node_list_add = []
 
     node_list_activate = {}
-    node_list_names = []
-
-    def find_activate(nodes, activate_names):
-        op_name = ''
-        for node in nodes:
-            confirm = 0
-            if node.op == 'call_method':
-                if node.target in activate_names:
-                    confirm += 1
-                    op_name = node.target
-            else:
-                if node.name.split('_')[0] in activate_names:
-                    confirm += 1
-                    op_name = node.name.split('_')[0]
-        return op_name
 
     def is_suitable(node):
         external_names = ['conv', 'bn', 'pool', 'classifier', 'drop']
@@ -220,13 +206,6 @@ def add_binary_model(model, bn_names, input_shape=None):
         elif node.op == "call_module":
             if not is_suitable(node):
                 return False
-            # if len(node.name.split('_')) == 3:
-            #     names = node.name.split('_')
-            #     sub_module = getattr(getattr(model, names[0])[int(names[1])], names[2])
-            # elif len(node.name.split('_')) > 3:
-            #     return False
-            # else:
-            #     sub_module = getattr(model, node.name)
             sub_module = get_model_op(model, node.name)
             try:
                 nodes = fx.symbolic_trace(sub_module).graph.nodes
@@ -246,14 +225,8 @@ def add_binary_model(model, bn_names, input_shape=None):
             is_activate(model, node, node_list_activate)
 
     def find_group_conv(model, node_input):
-        node_name = node_input.prev.name
-        if 'conv' not in node_name:
-            return False
-        if len(node_name.split('_')) == 3:
-            layer_name, index, conv_name = node_name.split('_')
-            conv_op = getattr(getattr(model, layer_name)[int(index)], conv_name)
-        else:
-            conv_op = getattr(model, node_name)
+        node_name = find_node_name(node_input, 'conv')
+        conv_op = get_model_op(model, node_name)
         if conv_op.groups > 1:
             return True
         else:
@@ -271,7 +244,7 @@ def add_binary_model(model, bn_names, input_shape=None):
                 node_list_activate.pop(node_input)
         if node.next in node_list_activate:
             node_list_activate.pop(node.next)
-    # 判读激活函数前的节点是否是group_conv，如果是则剔除
+    # 判读激活函数前的节点是否是group_conv，如果是则剔除(考虑conv-bn-act, conv-act两种)
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
             if find_group_conv(model, node_input):
@@ -279,7 +252,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
     for node in node_list_activate:
-        # import pdb;pdb.set_trace()
         try:
             inplanes = node.shape[1]
         except Exception as e:

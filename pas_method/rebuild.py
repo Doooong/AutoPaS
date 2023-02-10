@@ -1,5 +1,5 @@
 import copy
-
+import torch.nn as nn
 import numpy as np
 import torch.fx as fx
 import torch_pruning as tp
@@ -38,6 +38,7 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
     example_input = torch.randn(tuple(input_shape)).to('cuda')
+    ori_model = ori_model.to('cuda')
     DG.build_dependency(ori_model.eval(), example_inputs=example_input)
     for i, name in enumerate(remove_name.keys()):
         prune_op = get_model_op(ori_model, name)
@@ -61,34 +62,62 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
 def get_model_op(model, name):
     if name == '':
         return None
-    names = name.split('_')
-    # if len(names) == 1:
-    #     op = getattr(model, names[0])
-    # elif len(names) == 2:
-    #     op = get_sub_op(getattr(model, names[0]), names[1])
-    # elif len(names) == 3:
-    #     op = get_sub_op(get_sub_op(getattr(model, names[0]), names[1]), names[2])
-    # else:
-    #     op = get_sub_op(get_sub_op(get_sub_op(getattr(model, names[0]), names[1]), names[2]), names[3])
-    op = get_sub_op(model, names[0])
-    for name in names[1:]:
-        op = get_sub_op(op, name)
+    try:
+        op = getattr(model, name)
+    except Exception as e:
+        try:
+            all_names = name.split('_')
+            length = len(all_names)
+            op = model
+            for i in range(length):
+                if i < length - 1:
+                    try:
+                        if all_names[i + 1].isnumeric():
+                            op_name = all_names[i]
+                            op = get_sub_op(op, op_name)
+                        else:
+                            op_name = all_names[i] + '_' + all_names[i + 1]
+                            try:
+                                op = get_sub_op(op, op_name)
+                                i += 2
+                                if i >= length:
+                                    break
+                            except:
+                                op_name = all_names[i]
+                                op = get_sub_op(op, op_name)
+                    except:
+                        op = ''
+                elif i > length - 1:
+                    break
+                else:
+                    op = get_sub_op(op, all_names[i])
+        except Exception as e:
+            op = ''
     return op
 
 
 def get_sub_op(sub_model, sub_name):
     if sub_name.isnumeric():
-        op = sub_model[int(sub_name)]
+        if isinstance(sub_model, nn.Module):
+            op = list(sub_model.children())[int(sub_name)]
+        else:
+            op = sub_model[int(sub_name)]
     else:
         op = getattr(sub_model, sub_name)
     return op
 
 
+def transform_model(ori_model):
+    ori_model = fx.symbolic_trace(ori_model)
+    ori_model.graph.lint()
+    ori_model.recompile()
+    return ori_model
+
+
 def rebuild_model(ori_model, dbc_model, dbc_weights, bn_names, input_shape=None):
     remove_name, idxes = get_rm_names(dbc_model, dbc_weights, bn_names)
-    # remove_name = [name.replace('_', '.') for name in remove_name]
+    ori_model = transform_model(ori_model)
     state_dict = copy.deepcopy({k: v for k, v in dbc_weights.items() if k in ori_model.state_dict().keys()})
-    # import pdb;pdb.set_trace()
     ori_model.load_state_dict(state_dict)
     ori_model = tp_rebuild(ori_model, remove_name, idxes, input_shape=input_shape)
     return ori_model
