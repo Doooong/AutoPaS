@@ -172,6 +172,8 @@ def find_activate(nodes, activate_names):
             if node.name.split('_')[0] in activate_names:
                 confirm += 1
                 op_name = node.name.split('_')[0]
+    if op_name == 'hardtanh':
+        op_name = 'relu6'
     return op_name
 
 
@@ -179,7 +181,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
     fx_model = fx.symbolic_trace(model)
-    ori_model = copy.deepcopy(fx_model)
     i = 0
     visited = set()
     device = next(model.parameters()).device
@@ -198,7 +199,7 @@ def add_binary_model(model, bn_names, input_shape=None):
         return True
 
     def is_activate(model, node, node_list_activate):
-        activate_names = ['relu', 'sigmoid', 'silu']
+        activate_names = ['relu', 'sigmoid', 'silu', 'hardtanh']
 
         if node.op == 'call_method':
             if node.target in activate_names:
