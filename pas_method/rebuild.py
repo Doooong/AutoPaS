@@ -6,10 +6,14 @@ import torch_pruning as tp
 import torch
 
 
-def find_bn_name(node):
-    if 'bn' in node.next.name:
+# def find_bn_name(node):
+#     if 'bn' in node.next.name:
+#         return node.next.name
+#     return ''
+def find_bn_name(node, name):
+    if name in node.next.name:
         return node.next.name
-    return ''
+    return find_bn_name(node.next, name)
 
 
 def get_rm_names(dbc_model, dbc_weights, bn_names):
@@ -18,7 +22,11 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
     for node in fx_model.graph.nodes:
         if node.name in bn_names:
             # remove_name.append(node.prev.name)
-            remove_name[node.name] = find_bn_name(node)
+            name = find_bn_name(node, 'batch')
+            if name == '':
+                remove_name[node.name] = find_bn_name(node, 'bn')
+            else:
+                remove_name[node.name] = name
     idxes = []
     dbc_model.load_state_dict(dbc_weights)
     for name, module in dbc_model.named_modules():
@@ -33,6 +41,16 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
     return remove_name, idxes
 
 
+def remove_batch_idx(dbc_model, name):
+    fx_model = fx.symbolic_trace(dbc_model)
+    batch_list = []
+    for node in fx_model.graph.nodes:
+        if name == node.name:
+            batch_list = [node.name for node in node.all_input_nodes]
+            return batch_list
+    return batch_list
+
+
 def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
     DG = tp.DependencyGraph()
     if input_shape is None:
@@ -43,6 +61,16 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
     for i, name in enumerate(remove_name.keys()):
         prune_op = get_model_op(ori_model, name)
         bn_op = get_model_op(ori_model, remove_name[name])
+        if bn_op == '':
+            remove_batch_list = remove_batch_idx(ori_model, remove_name[name])
+            if len(remove_batch_list):
+                for name in remove_batch_list:
+                    op = get_model_op(ori_model, name)
+                    if isinstance(op, torch.Tensor):
+                        op.data[idxes[i]] = 0
+                        remain_idx = np.where(op.data.detach().cpu().numpy() != 0)
+                        new_data = op.data[remain_idx]
+                        op.data = new_data.to(op.data.device)
         if prune_op.weight.shape[0] == len(idxes[i]):
             prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
             if bn_op:

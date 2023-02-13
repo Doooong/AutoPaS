@@ -188,7 +188,7 @@ def add_binary_model(model, bn_names, input_shape=None):
     ShapeProp(fx_model).propagate(torch.rand(*input_shape, dtype=dtype).to(device))
     relu_scaled_list = nn.ModuleList()
     node_list_add = []
-
+    node_list_mul = []
     node_list_activate = {}
 
     def is_suitable(node):
@@ -222,6 +222,8 @@ def add_binary_model(model, bn_names, input_shape=None):
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
+        if 'mul' in node.name:
+            node_list_mul.append(node)
         if 'pool' not in node.next.name:
             is_activate(model, node, node_list_activate)
 
@@ -229,6 +231,16 @@ def add_binary_model(model, bn_names, input_shape=None):
         node_name = find_node_name(node_input, 'conv')
         conv_op = get_model_op(model, node_name)
         if conv_op.groups > 1:
+            return True
+        elif conv_op.stride[0] > 1:
+            return True
+        else:
+            return False
+
+    def find_conv_stride(model, node_input):
+        node_name = find_node_name(node_input, 'conv')
+        conv_op = get_model_op(model, node_name)
+        if conv_op.stride[0] > 1:
             return True
         else:
             return False
@@ -245,10 +257,17 @@ def add_binary_model(model, bn_names, input_shape=None):
                 node_list_activate.pop(node_input)
         if node.next in node_list_activate:
             node_list_activate.pop(node.next)
+    # for node in node_list_mul:
+    #     # 判断要替换的node节点在不在node.mul的历史记录里
+    #     for node_input in node.all_input_nodes:
+    #         if node_input in node_list_activate:
+    #             node_list_activate.pop(node_input)
+    #     if node.next in node_list_activate:
+    #         node_list_activate.pop(node.next)
     # 判读激活函数前的节点是否是group_conv，如果是则剔除(考虑conv-bn-act, conv-act两种)
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            if find_group_conv(model, node_input):
+            if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
                 del node_list_activate[node]
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
