@@ -9,10 +9,6 @@ from torch.fx.node import Node
 from .rebuild import get_model_op
 
 
-# from torchvision.models.feature_extraction import get_graph_node_names
-# from torchvision.models.feature_extraction import create_feature_extractor
-
-
 class ModulePathTracer(torch.fx.Tracer):
     """
     ModulePathTracer is an FX tracer that--for each operation--also records
@@ -83,19 +79,11 @@ class BinaryConv2d(nn.Conv2d):
 class ScaledConv2D(nn.Module):
     def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
-        # if node.op == 'call_function':
-        #     self.act = getattr(F, node)
-        # elif node.op == "call_module":
-        #     self.act = getattr(F, node.name.split("_")[-1])
-        # else:
-        #     self.act = getattr(F, node.target)
         self.act = getattr(F, node)
         self.scale0 = BinaryConv2d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
 
     def forward(self, x):
-        # x = self.relu(x)
         x = self.act(x)
-        # x = F.relu(self.scale0(x))
         x = self.scale0(x)
 
         return x
@@ -219,6 +207,8 @@ def find_group_conv(model, node_input):
 def find_node_name(node, name):
     if name in node.prev.name:
         return node.prev.name
+    if node.prev.name == '':
+        return ''
     return find_node_name(node.prev, name)
 
 
@@ -233,20 +223,18 @@ def add_binary_model(model, bn_names, input_shape=None):
     ShapeProp(fx_model).propagate(torch.rand(*input_shape, dtype=dtype).to(device))
     relu_scaled_list = nn.ModuleList()
     node_list_add = []
-
     node_list_activate = {}
-
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
         if 'pool' not in node.next.name:
             is_activate(model, node, node_list_activate)
-
     for node in node_list_add:
         # 判断要替换的node节点在不在node.add的历史记录里
         for node_input in node.all_input_nodes:
             if node_input in node_list_activate:
                 node_list_activate.pop(node_input)
+        # add后的激活函数不增加binary_conv2d，因为无法找到对应的model_op
         if node.next in node_list_activate:
             node_list_activate.pop(node.next)
     # 判读激活函数前的节点是否是group_conv，如果是则剔除(考虑conv-bn-act, conv-act两种)
@@ -275,43 +263,3 @@ def add_binary_model(model, bn_names, input_shape=None):
     fx_model.graph.lint()
     fx_model.recompile()
     return fx_model, bn_names
-
-
-if __name__ == "__main__":
-    from torchvision.models import resnet50
-
-    # from co_lib.co_lib.pruning.ptflops import get_flops_model
-
-    model = resnet50(pretrained=False)
-    # model.eval()
-    # new_model = add_binary_model(model)
-    # x = torch.randn([1, 3, 224, 224])  # 生成张量
-    channel_list, mac_list, param_list = [], [], []
-    flop_model = get_flops_model(model, (3, 224, 224))
-    # macs, params = get_model_complexity_info(model, (3, 224, 224), as_strings=True,
-    #                                          print_per_layer_stat=True, verbose=True)
-    gm = fx.symbolic_trace(model)
-    ShapeProp(gm).propagate(torch.rand([1, 3, 224, 224]))
-    for name, module in flop_model.named_modules():
-        if 'bn' in name:
-            channel_list.append(module.weight.data.detach().shape[0])
-        if 'conv' in name:
-            mac_list.append(module.__flops__)
-            # param_list.append(module.__params__)
-            for node in gm.graph.nodes:
-                if name == node.name.replace("_", '.'):
-                    kernel_size = module.kernel_size
-                    param_list.append(kernel_size[0] * kernel_size[0] * node.shape[2] * node.shape[3])
-                    break
-            # a.append(module(name, inputs))
-    print(channel_list)
-    print('\n')
-    print(mac_list)
-    print(param_list)
-    # x = x.to("cuda")
-    # export_onnx_file = "test.onnx"  # 目的ONNX文件名
-    # torch.onnx.export(new_model, x, export_onnx_file, opset_version=10, do_constant_folding=True, input_names=["input"],
-    #                   output_names=["output"], dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}})
-    # gm = fx.symbolic_trace(new_model)
-    # gm.graph.print_tabular()
-    # print(new_model)
