@@ -61,7 +61,15 @@ def check_batch_norma(ori_model, remove_name):
                     if out_channel != -1 and op.data.size(0) > out_channel:
                         if len(idx) == 0:
                             idx = last_idx
+                        if len(last_idx) == 0:
+                            remove_length = op.data.size(0) - out_channel
+                            for key in remove_name.keys():
+                                if len(remove_name[key]['idx']) == remove_length:
+                                    last_idx = remove_name[key]['idx']
+                                    idx = last_idx
+                                    break
                         op.data[idx] = 0
+                        # import pdb; pdb.set_trace()
                         remain_idx = [x for x in list(range(op.size()[0])) if x not in idx]
                         new_data = op.data[remain_idx]
                         op.data = new_data.to(op.data.device)
@@ -96,7 +104,7 @@ def tp_rebuild(ori_model, remove_name, input_shape=None):
         # 3. prune all grouped layer that is coupled with model.conv1
         if DG.check_pruning_group(pruning_group):
             pruning_group.exec()
-        ori_model = check_batch_norma(ori_model, remove_name)
+    ori_model = check_batch_norma(ori_model, remove_name)
     return ori_model
 
 
