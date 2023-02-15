@@ -177,6 +177,51 @@ def find_activate(nodes, activate_names):
     return op_name
 
 
+def is_suitable(node):
+    external_names = ['conv', 'bn', 'pool', 'classifier', 'drop']
+    for name in external_names:
+        if name in node.name and 'act' not in node.name:
+            return False
+    return True
+
+
+def is_activate(model, node, node_list_activate):
+    activate_names = ['relu', 'sigmoid', 'silu', 'hardtanh']
+
+    if node.op == 'call_method':
+        if node.target in activate_names:
+            node_list_activate[node] = node.target
+    elif node.op == "call_module":
+        if not is_suitable(node):
+            return False
+        sub_module = get_model_op(model, node.name)
+        try:
+            nodes = fx.symbolic_trace(sub_module).graph.nodes
+            op_name = find_activate(nodes, activate_names)
+            if op_name != '':
+                node_list_activate[node] = op_name
+        except Exception as e:
+            pass
+    else:
+        if node.name.split('_')[0] in activate_names:
+            node_list_activate[node] = node.name.split("_")[0]
+
+
+def find_group_conv(model, node_input):
+    node_name = find_node_name(node_input, 'conv')
+    conv_op = get_model_op(model, node_name)
+    if conv_op.groups > 1:
+        return True
+    else:
+        return False
+
+
+def find_node_name(node, name):
+    if name in node.prev.name:
+        return node.prev.name
+    return find_node_name(node.prev, name)
+
+
 def add_binary_model(model, bn_names, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
@@ -191,52 +236,11 @@ def add_binary_model(model, bn_names, input_shape=None):
 
     node_list_activate = {}
 
-    def is_suitable(node):
-        external_names = ['conv', 'bn', 'pool', 'classifier', 'drop']
-        for name in external_names:
-            if name in node.name and 'act' not in node.name:
-                return False
-        return True
-
-    def is_activate(model, node, node_list_activate):
-        activate_names = ['relu', 'sigmoid', 'silu', 'hardtanh']
-
-        if node.op == 'call_method':
-            if node.target in activate_names:
-                node_list_activate[node] = node.target
-        elif node.op == "call_module":
-            if not is_suitable(node):
-                return False
-            sub_module = get_model_op(model, node.name)
-            try:
-                nodes = fx.symbolic_trace(sub_module).graph.nodes
-                op_name = find_activate(nodes, activate_names)
-                if op_name != '':
-                    node_list_activate[node] = op_name
-            except Exception as e:
-                pass
-        else:
-            if node.name.split('_')[0] in activate_names:
-                node_list_activate[node] = node.name.split("_")[0]
-
     for node in fx_model.graph.nodes:
         if 'add' in node.name:
             node_list_add.append(node)
         if 'pool' not in node.next.name:
             is_activate(model, node, node_list_activate)
-
-    def find_group_conv(model, node_input):
-        node_name = find_node_name(node_input, 'conv')
-        conv_op = get_model_op(model, node_name)
-        if conv_op.groups > 1:
-            return True
-        else:
-            return False
-
-    def find_node_name(node, name):
-        if name in node.prev.name:
-            return node.prev.name
-        return find_node_name(node.prev, name)
 
     for node in node_list_add:
         # 判断要替换的node节点在不在node.add的历史记录里
