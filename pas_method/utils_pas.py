@@ -165,7 +165,7 @@ def find_activate(nodes, activate_names):
 
 
 def is_suitable(node):
-    external_names = ['conv', 'bn', 'pool', 'classifier', 'drop']
+    external_names = ['conv', 'bn', 'pool', 'classifier', 'drop', 'se']
     for name in external_names:
         if name in node.name and 'act' not in node.name:
             return False
@@ -217,6 +217,15 @@ def find_node_name(node, name, prev=True):
     return find_node_name(find_node, name, prev=prev)
 
 
+def find_conv_stride(model, node_input):
+    node_name = find_node_name(node_input, 'conv')
+    conv_op = get_model_op(model, node_name)
+    if conv_op.stride[0] > 1:
+        return True
+    else:
+        return False
+
+
 def add_binary_model(model, bn_names, input_shape=None):
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
@@ -245,7 +254,7 @@ def add_binary_model(model, bn_names, input_shape=None):
     # 判读激活函数前的节点是否是group_conv，如果是则剔除(考虑conv-bn-act, conv-act两种)
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            if find_group_conv(model, node_input):
+            if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
                 del node_list_activate[node]
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
