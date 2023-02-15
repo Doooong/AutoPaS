@@ -4,3 +4,4 @@
 *.pth
 *.pth.tar
 model_debug
+output

@@ -26,7 +26,6 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
             w = module.weight.detach()
             binary_w = (w > 0.5).float()
             residual = w - binary_w
-            # import pdb; pdb.set_trace()
             weight = module.weight.detach().cpu().numpy() - residual.detach().cpu().numpy()
             idxes.append(np.where(weight < 0.5)[0].tolist())
             print(f"{weight.shape[0]} - > {weight.shape[0] - len(np.where(weight < 0.5)[0].tolist())}")
@@ -114,10 +113,11 @@ def transform_model(ori_model):
     return ori_model
 
 
-def rebuild_model(ori_model, dbc_model, dbc_weights, bn_names, input_shape=None):
+def rebuild_model(ori_model, dbc_model, dbc_weights, bn_names, input_shape=None, is_load=True):
     remove_name, idxes = get_rm_names(dbc_model, dbc_weights, bn_names)
     ori_model = transform_model(ori_model)
     state_dict = copy.deepcopy({k: v for k, v in dbc_weights.items() if k in ori_model.state_dict().keys()})
-    ori_model.load_state_dict(state_dict)
+    if is_load:
+        ori_model.load_state_dict(state_dict)
     ori_model = tp_rebuild(ori_model, remove_name, idxes, input_shape=input_shape)
     return ori_model
