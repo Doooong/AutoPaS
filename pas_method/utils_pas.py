@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import torch.fx as fx
 from typing import Any, Callable, Dict, Optional, Tuple
 from torch.fx.node import Node
-from .rebuild import get_model_op
 
 
 class ModulePathTracer(torch.fx.Tracer):
@@ -204,12 +203,18 @@ def find_group_conv(model, node_input):
         return False
 
 
-def find_node_name(node, name):
-    if name in node.prev.name:
-        return node.prev.name
-    if node.prev.name == '':
+def find_node_name(node, name, prev=True):
+    if prev:
+        find_name = node.prev.name
+        find_node = node.prev
+    else:
+        find_name = node.next.name
+        find_node = node.next
+    if name in find_name:
+        return find_name
+    if find_name == '':
         return ''
-    return find_node_name(node.prev, name)
+    return find_node_name(find_node, name, prev=prev)
 
 
 def add_binary_model(model, bn_names, input_shape=None):
@@ -263,3 +268,51 @@ def add_binary_model(model, bn_names, input_shape=None):
     fx_model.graph.lint()
     fx_model.recompile()
     return fx_model, bn_names
+
+
+def get_model_op(model, name):
+    if name == '':
+        return None
+    try:
+        op = getattr(model, name)
+    except Exception as e:
+        try:
+            all_names = name.split('_')
+            length = len(all_names)
+            op = model
+            for i in range(length):
+                if i < length - 1:
+                    try:
+                        if all_names[i + 1].isnumeric():
+                            op_name = all_names[i]
+                            op = get_sub_op(op, op_name)
+                        else:
+                            op_name = all_names[i] + '_' + all_names[i + 1]
+                            try:
+                                op = get_sub_op(op, op_name)
+                                i += 2
+                                if i >= length:
+                                    break
+                            except:
+                                op_name = all_names[i]
+                                op = get_sub_op(op, op_name)
+                    except:
+                        op = ''
+                elif i > length - 1:
+                    break
+                else:
+                    op = get_sub_op(op, all_names[i])
+        except Exception as e:
+            op = ''
+    return op
+
+
+def get_sub_op(sub_model, sub_name):
+    if sub_name.isnumeric():
+        if isinstance(sub_model, nn.Module):
+            op = list(sub_model.children())[int(sub_name)]
+        else:
+            op = sub_model[int(sub_name)]
+    else:
+        op = getattr(sub_model, sub_name)
+    return op

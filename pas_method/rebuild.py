@@ -4,6 +4,7 @@ import numpy as np
 import torch.fx as fx
 import torch_pruning as tp
 import torch
+from pas_method import find_node_name, get_model_op, ShapeProp
 
 
 def find_bn_name(node):
@@ -17,8 +18,11 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
     fx_model = fx.symbolic_trace(dbc_model)
     for node in fx_model.graph.nodes:
         if node.name in bn_names:
-            # remove_name.append(node.prev.name)
-            remove_name[node.name] = find_bn_name(node)
+            name = find_node_name(node, 'batch_norm', prev=False)
+            if name == '':
+                remove_name[node.name] = {'name': find_node_name(node, 'bn', prev=False)}
+            else:
+                remove_name[node.name] = {'name': name}
     idxes = []
     dbc_model.load_state_dict(dbc_weights)
     for name, module in dbc_model.named_modules():
@@ -29,10 +33,47 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
             weight = module.weight.detach().cpu().numpy() - residual.detach().cpu().numpy()
             idxes.append(np.where(weight < 0.5)[0].tolist())
             print(f"{weight.shape[0]} - > {weight.shape[0] - len(np.where(weight < 0.5)[0].tolist())}")
-    return remove_name, idxes
+    for i, name in enumerate(remove_name.keys()):
+        remove_name[name]['idx'] = idxes[i]
+    return remove_name
 
 
-def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
+def remove_batch_idx(dbc_model, name):
+    fx_model = fx.symbolic_trace(dbc_model)
+    batch_list = []
+    for node in fx_model.graph.nodes:
+        if name == node.name:
+            batch_list = [node.name for node in node.all_input_nodes]
+            return batch_list
+    return batch_list
+
+
+def check_batch_norma(ori_model, remove_name):
+    last_idx = []
+    for node in fx.symbolic_trace(ori_model).graph.nodes:
+        if 'batch_norm' in node.name and node.op == 'call_function':
+            batch_list = [node.name for node in node.all_input_nodes]
+            idx = []
+            out_channel = -1
+            for name in batch_list:
+                op = get_model_op(ori_model, name)
+                if isinstance(op, torch.Tensor):
+                    if out_channel != -1 and op.data.size(0) > out_channel:
+                        if len(idx) == 0:
+                            idx = last_idx
+                        op.data[idx] = 0
+                        remain_idx = [x for x in list(range(op.size()[0])) if x not in idx]
+                        new_data = op.data[remain_idx]
+                        op.data = new_data.to(op.data.device)
+                else:
+                    out_channel = op.out_channels
+                    if name in remove_name.keys():
+                        idx = remove_name[name]['idx']
+                        last_idx = idx
+    return ori_model
+
+
+def tp_rebuild(ori_model, remove_name, input_shape=None):
     DG = tp.DependencyGraph()
     if input_shape is None:
         input_shape = [1, 3, 224, 224]
@@ -41,8 +82,8 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
     DG.build_dependency(ori_model.eval(), example_inputs=example_input)
     for i, name in enumerate(remove_name.keys()):
         prune_op = get_model_op(ori_model, name)
-        bn_op = get_model_op(ori_model, remove_name[name])
-        if prune_op.weight.shape[0] == len(idxes[i]):
+        bn_op = get_model_op(ori_model, remove_name[name]['name'])
+        if prune_op.weight.shape[0] == len(remove_name[name]['idx']):
             prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
             if bn_op:
                 bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
@@ -51,59 +92,12 @@ def tp_rebuild(ori_model, remove_name, idxes, input_shape=None):
                 bn_op.bias.data = torch.zeros_like(bn_op.bias.data).to(bn_op.bias.data.device)
             continue
         pruning_group = DG.get_pruning_group(prune_op,
-                                             tp.prune_conv_out_channels, idxs=idxes[i])
+                                             tp.prune_conv_out_channels, idxs=remove_name[name]['idx'])
         # 3. prune all grouped layer that is coupled with model.conv1
         if DG.check_pruning_group(pruning_group):
             pruning_group.exec()
+        ori_model = check_batch_norma(ori_model, remove_name)
     return ori_model
-
-
-def get_model_op(model, name):
-    if name == '':
-        return None
-    try:
-        op = getattr(model, name)
-    except Exception as e:
-        try:
-            all_names = name.split('_')
-            length = len(all_names)
-            op = model
-            for i in range(length):
-                if i < length - 1:
-                    try:
-                        if all_names[i + 1].isnumeric():
-                            op_name = all_names[i]
-                            op = get_sub_op(op, op_name)
-                        else:
-                            op_name = all_names[i] + '_' + all_names[i + 1]
-                            try:
-                                op = get_sub_op(op, op_name)
-                                i += 2
-                                if i >= length:
-                                    break
-                            except:
-                                op_name = all_names[i]
-                                op = get_sub_op(op, op_name)
-                    except:
-                        op = ''
-                elif i > length - 1:
-                    break
-                else:
-                    op = get_sub_op(op, all_names[i])
-        except Exception as e:
-            op = ''
-    return op
-
-
-def get_sub_op(sub_model, sub_name):
-    if sub_name.isnumeric():
-        if isinstance(sub_model, nn.Module):
-            op = list(sub_model.children())[int(sub_name)]
-        else:
-            op = sub_model[int(sub_name)]
-    else:
-        op = getattr(sub_model, sub_name)
-    return op
 
 
 def transform_model(ori_model):
@@ -114,10 +108,10 @@ def transform_model(ori_model):
 
 
 def rebuild_model(ori_model, dbc_model, dbc_weights, bn_names, input_shape=None, is_load=True):
-    remove_name, idxes = get_rm_names(dbc_model, dbc_weights, bn_names)
+    remove_name = get_rm_names(dbc_model, dbc_weights, bn_names)
     ori_model = transform_model(ori_model)
     state_dict = copy.deepcopy({k: v for k, v in dbc_weights.items() if k in ori_model.state_dict().keys()})
     if is_load:
         ori_model.load_state_dict(state_dict)
-    ori_model = tp_rebuild(ori_model, remove_name, idxes, input_shape=input_shape)
+    ori_model = tp_rebuild(ori_model, remove_name, input_shape=input_shape)
     return ori_model
