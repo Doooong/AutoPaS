@@ -78,13 +78,27 @@ class BinaryConv2d(nn.Conv2d):
 class ScaledConv2D(nn.Module):
     def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
+
         self.act = getattr(F, node)
         self.scale0 = BinaryConv2d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
 
     def forward(self, x):
         x = self.act(x)
         x = self.scale0(x)
+        return x
 
+
+class ScaledConv2DSiLu(nn.Module):
+    def __init__(self, inplanes, node):
+        super(ScaledConv2DSiLu, self).__init__()
+        self.act = nn.Sigmoid()
+        self.scale0 = BinaryConv2d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
+
+    def forward(self, x):
+        ori = x
+        x = self.act(x)
+        x = self.scale0(x)
+        x = x * ori
         return x
 
 
@@ -165,9 +179,10 @@ def find_activate(nodes, activate_names):
 
 
 def is_suitable(node):
-    external_names = ['conv', 'bn', 'pool', 'classifier', 'drop', 'se']
+    external_names = ['conv', 'bn', 'pool', 'classifier']
     for name in external_names:
         if name in node.name and 'act' not in node.name:
+            # if name in node.name:
             return False
     return True
 
@@ -179,8 +194,6 @@ def is_activate(model, node, node_list_activate):
         if node.target in activate_names:
             node_list_activate[node] = node.target
     elif node.op == "call_module":
-        if not is_suitable(node):
-            return False
         sub_module = get_model_op(model, node.name)
         try:
             nodes = fx.symbolic_trace(sub_module).graph.nodes
@@ -201,6 +214,18 @@ def find_group_conv(model, node_input):
         return True
     else:
         return False
+
+
+def find_rm_node_in_depth(node, name_list_activate, depth=2):
+    # node前的节点不能是mul或者silu,最多遍历两层
+    for i in range(depth):
+        prev = node.prev
+        if 'mul' in prev.name:
+            return True
+        if prev.name in name_list_activate and name_list_activate[prev.name] == 'silu':
+            return True
+        node = prev
+    return False
 
 
 def find_node_name(node, name, prev=True):
@@ -238,7 +263,10 @@ def add_binary_model(model, bn_names, input_shape=None):
     relu_scaled_list = nn.ModuleList()
     node_list_add = []
     node_list_activate = {}
+    node_list_mul = []
     for node in fx_model.graph.nodes:
+        if 'mul' in node.name:
+            node_list_mul.append(node)
         if 'add' in node.name:
             node_list_add.append(node)
         if 'pool' not in node.next.name:
@@ -252,10 +280,15 @@ def add_binary_model(model, bn_names, input_shape=None):
         if node.next in node_list_activate:
             node_list_activate.pop(node.next)
     # 判读激活函数前的节点是否是group_conv，如果是则剔除(考虑conv-bn-act, conv-act两种)
+    name_list_activate = {k.name: node_list_activate[k] for k in node_list_activate.keys()}
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
+            # if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
+            if find_group_conv(model, node_input):
                 del node_list_activate[node]
+        if find_rm_node_in_depth(node, name_list_activate, depth=2):
+            del node_list_activate[node]
+    del name_list_activate
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
     for node in node_list_activate:
@@ -265,9 +298,12 @@ def add_binary_model(model, bn_names, input_shape=None):
             inplanes = node.prev.shape[1]
         rm_name = find_node_name(node, 'conv')
         bn_names.append(rm_name)
-        active_name = node.name.split('_')[0]
+        active_name = node_list_activate[node]
         with fx_model.graph.inserting_after(node):
-            relu_scaled_list.append(ScaledConv2D(inplanes, node_list_activate[node]))
+            if node_list_activate[node] == 'silu':
+                relu_scaled_list.append(ScaledConv2DSiLu(inplanes, node_list_activate[node]))
+            else:
+                relu_scaled_list.append(ScaledConv2D(inplanes, node_list_activate[node]))
             fx_model.add_submodule(f'{active_name}_scaled_{i}', relu_scaled_list[i])
             new_node = fx_model.graph.call_module(f'{active_name}_scaled_{i}', node.args, {})
             node.replace_all_uses_with(new_node)
