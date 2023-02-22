@@ -5,3 +5,4 @@
 *.pth.tar
 model_debug
 output
+*.pyc
