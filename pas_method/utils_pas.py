@@ -210,6 +210,8 @@ def is_activate(model, node, node_list_activate):
 def find_group_conv(model, node_input):
     node_name = find_node_name(node_input, 'conv')
     conv_op = get_model_op(model, node_name)
+    if not is_conv(conv_op):
+        return False
     if conv_op.groups > 1:
         return True
     else:
@@ -242,9 +244,22 @@ def find_node_name(node, name, prev=True):
     return find_node_name(find_node, name, prev=prev)
 
 
+def is_conv(op):
+    conv_list = ['Conv1d', 'Conv2d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose2d', 'ConvTranspose3d',
+                 'LazyConv1d', 'LazyConv2d', 'LazyConv3d', 'LazyConvTranspose1d', 'LazyConvTranspose2d',
+                 'LazyConvTranspose3d']
+    for name in conv_list:
+        if isinstance(op, getattr(nn, name)):
+            return True
+    return False
+
+
 def find_conv_stride(model, node_input):
     node_name = find_node_name(node_input, 'conv')
+
     conv_op = get_model_op(model, node_name)
+    if not is_conv(conv_op):
+        return False
     if conv_op.stride[0] > 1:
         return True
     else:
@@ -325,12 +340,21 @@ def get_model_op(model, name):
             all_names = name.split('_')
             length = len(all_names)
             op = model
-            for i in range(length):
+            i = 0
+            while i < length:
                 if i < length - 1:
                     try:
                         if all_names[i + 1].isnumeric():
-                            op_name = all_names[i]
-                            op = get_sub_op(op, op_name)
+                            try:
+                                op_name = all_names[i]
+                                op = get_sub_op(op, op_name)
+                                i += 1
+                            except:
+                                op_name = all_names[i] + '_' + all_names[i + 1]
+                                op = get_sub_op(op, op_name)
+                                i += 2
+                                if i >= length:
+                                    break
                         else:
                             op_name = all_names[i] + '_' + all_names[i + 1]
                             try:
@@ -341,12 +365,14 @@ def get_model_op(model, name):
                             except:
                                 op_name = all_names[i]
                                 op = get_sub_op(op, op_name)
+                                i += 1
                     except:
                         op = ''
                 elif i > length - 1:
                     break
                 else:
                     op = get_sub_op(op, all_names[i])
+                    i += 1
         except Exception as e:
             op = ''
     return op
@@ -359,5 +385,11 @@ def get_sub_op(sub_model, sub_name):
         else:
             op = sub_model[int(sub_name)]
     else:
-        op = getattr(sub_model, sub_name)
+        names = [name for name, _ in sub_model.named_modules()]
+        upper_names = [name.upper() for name in names]
+        if sub_name.upper() in upper_names:
+            sub_name = names[upper_names.index(sub_name.upper())]
+            op = getattr(sub_model, sub_name)
+        else:
+            op = getattr(sub_model, sub_name)
     return op
