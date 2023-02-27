@@ -48,47 +48,10 @@ class PaS:
         # self.get_model_channel_flop()
         self.model, self.bn_names = add_binary_model(self.model, self.bn_names, self.input_shape)
         # self.model = add_binary_model(self.model, self.bn_names, self.input_shape)
-        self.generate_bn_weights()
+        self.init_dbc_weights()
         return self.model, self.bn_names
 
-    def generate_bn_weights(self):
-        # BNs = torch.tensor([]).cuda()
-        # weights = torch.tensor([]).cuda()
-        # length = []
-        # # names = []
-        # n = 0
-        # bn_names = [name.replace('_', '.') for name in self.bn_names]
-        # channel_list = []
-        # for name, module in self.model.named_modules():
-        #     if 'bn' in name and name in bn_names:
-        #         data = module.weight.data.detach().to(BNs.device)
-        #         BNs = torch.cat((BNs, data), dim=0)
-        #         weights = torch.cat((weights, torch.ones(data.size()).cuda() * n), dim=0)
-        #         length.append(data.size(0))
-        #         channel_list.append(data.size(0))
-        #         # names.append('module.' + name + '.weight')
-        #         n += 1
-        #
-        # srt, idx = torch.sort(torch.clone(BNs))
-        # sort_weights = weights[idx]
-        # lis = channel_list
-        # # accumulation = 0.
-        # j = 0
-        # for i in range(sort_weights.size(0)):
-        #     # accumulation += sort_weights[i]
-        #     # meter.update(sort_weights[i])
-        #     lis[int(sort_weights[i])] -= 1
-        #     j += 1
-        #     # print(sum(meter.macs_list)/1e9, sum(repvgg_b1_list)/1e9)
-        #     if sum(lis) < sum(length) * (1 - self.prune_ratio):
-        #         break
-        # _, final_idx = torch.topk(BNs, int(j), largest=False)
-        # BNs[final_idx] = 0
-        #
-        # BNs = (BNs > 0).float()
-        #
-        # sep = torch.split(BNs, length)
-        # count_layer = 0
+    def init_dbc_weights(self):
         for name, module in self.model.named_modules():
             if '_scaled' in name and ".scale" in name:
                 channel_num = module.weight.shape[0]
