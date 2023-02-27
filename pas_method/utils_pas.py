@@ -242,7 +242,7 @@ def is_activate(model, node, node_list_activate):
 
 
 def find_group_conv(model, node_input):
-    node_name = find_node_name(node_input, 'conv')
+    node_name = find_node_name(model, node_input, 'conv')
     conv_op = get_model_op(model, node_name)
     if not is_conv(conv_op):
         return False
@@ -264,18 +264,21 @@ def find_rm_node_in_depth(node, name_list_activate, depth=2):
     return False
 
 
-def find_node_name(node, name, prev=True):
+def find_node_name(model, node, name, prev=True):
+    name_function = {'conv': is_conv, 'bn:': is_bn}
+
     if prev:
         find_name = node.prev.name
         find_node = node.prev
     else:
         find_name = node.next.name
         find_node = node.next
-    if name in find_name:
+    node_op = get_model_op(model, find_name)
+    if name_function[name](node_op):
         return find_name
     if find_name == '':
         return ''
-    return find_node_name(find_node, name, prev=prev)
+    return find_node_name(model, find_node, name, prev=prev)
 
 
 def is_conv(op):
@@ -288,8 +291,17 @@ def is_conv(op):
     return False
 
 
+def is_bn(op):
+    bn_list = ['BatchNorm1d', 'LazyBatchNorm1d', 'BatchNorm2d', 'LazyBatchNorm2d', 'BatchNorm3d',
+               'LazyBatchNorm3d', 'SyncBatchNorm']
+    for name in bn_list:
+        if isinstance(op, getattr(nn, name)):
+            return True
+    return False
+
+
 def find_conv_stride(model, node_input):
-    node_name = find_node_name(node_input, 'conv')
+    node_name = find_node_name(model, node_input, 'conv')
 
     conv_op = get_model_op(model, node_name)
     if not is_conv(conv_op):
@@ -346,11 +358,14 @@ def add_binary_model(model, bn_names, input_shape=None):
             inplanes = node.shape[1]
         except Exception as e:
             inplanes = node.prev.shape[1]
-        rm_name = find_node_name(node, 'conv')
-        bn_names.append(rm_name)
+        rm_conv_name = find_node_name(model, node, 'conv')
+        bn_names.append(rm_conv_name)
         active_name = node_list_activate[node]
         with fx_model.graph.inserting_after(node):
-            if node_list_activate[node] == 'silu':
+            prev_conv_op = get_model_op(model, rm_conv_name)
+            if isinstance(prev_conv_op, nn.Conv3d):
+                relu_scaled_list.append(ScaledConv3D(inplanes, node_list_activate[node]))
+            elif node_list_activate[node] == 'silu':
                 relu_scaled_list.append(ScaledConv2DSiLu(inplanes, node_list_activate[node]))
             else:
                 relu_scaled_list.append(ScaledConv2D(inplanes, node_list_activate[node]))

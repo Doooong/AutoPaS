@@ -1,5 +1,5 @@
 import random
-
+import torch.nn as nn
 import torch
 from .utils_pas import add_binary_model, ShapeProp
 from .ptflops import get_flops_model
@@ -98,5 +98,8 @@ class PaS:
                 zero_idx = random.sample(list(range(channel_num)), zero_num)
                 init_weight[zero_idx] = 0
                 module.weight.data = module.weight.data.to(device)
-                module.weight.data *= init_weight.reshape(init_weight.size(0), 1, 1, 1)
+                if isinstance(module, nn.Conv2d):
+                    module.weight.data *= init_weight.reshape(init_weight.size(0), 1, 1, 1)
+                elif isinstance(module, nn.Conv3d):
+                    module.weight.data *= init_weight.reshape(init_weight.size(0), 1, 1, 1, 1)
                 # count_layer += 1
