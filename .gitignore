@@ -7,3 +7,6 @@ model_debug
 output
 *.pyc
 __pycache__
+YOLOv6
+segmentation_unet
+video_classification_s2_1d

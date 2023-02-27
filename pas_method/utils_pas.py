@@ -75,6 +75,27 @@ class BinaryConv2d(nn.Conv2d):
         return output
 
 
+class BinaryConv3d(nn.Conv3d):
+    """docstring for QuanConv"""
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1, bias=False):
+        super(BinaryConv3d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation,
+                                           groups, bias)
+        nn.init.constant_(self.weight, 1.0)
+
+    # @weak_script_method
+    def forward(self, x):
+        # weight = self.weight
+        w = self.weight.detach()
+        binary_w = (w > 0.5).float()
+        residual = w - binary_w
+        weight = self.weight - residual
+        weight = weight.to(x.device)
+        output = F.conv3d(x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return output
+
+
 class ScaledConv2D(nn.Module):
     def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
@@ -99,6 +120,19 @@ class ScaledConv2DSiLu(nn.Module):
         x = self.act(x)
         x = self.scale0(x)
         x = x * ori
+        return x
+
+
+class ScaledConv3D(nn.Module):
+    def __init__(self, inplanes, node):
+        super(ScaledConv3D, self).__init__()
+
+        self.act = getattr(F, node)
+        self.scale0 = BinaryConv3d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
+
+    def forward(self, x):
+        x = self.act(x)
+        x = self.scale0(x)
         return x
 
 
@@ -298,7 +332,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     name_list_activate = {k.name: node_list_activate[k] for k in node_list_activate.keys()}
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            # if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
             if find_group_conv(model, node_input):
                 del node_list_activate[node]
         if find_rm_node_in_depth(node, name_list_activate, depth=2):
@@ -306,6 +339,8 @@ def add_binary_model(model, bn_names, input_shape=None):
     del name_list_activate
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
+    # sample_list = {k: node_list_activate[k] for i, k in enumerate(node_list_activate) if i > 1}
+    # print(sample_list)
     for node in node_list_activate:
         try:
             inplanes = node.shape[1]
