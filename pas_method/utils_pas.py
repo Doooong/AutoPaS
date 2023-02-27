@@ -75,6 +75,27 @@ class BinaryConv2d(nn.Conv2d):
         return output
 
 
+class BinaryConv3d(nn.Conv3d):
+    """docstring for QuanConv"""
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1, bias=False):
+        super(BinaryConv3d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation,
+                                           groups, bias)
+        nn.init.constant_(self.weight, 1.0)
+
+    # @weak_script_method
+    def forward(self, x):
+        # weight = self.weight
+        w = self.weight.detach()
+        binary_w = (w > 0.5).float()
+        residual = w - binary_w
+        weight = self.weight - residual
+        weight = weight.to(x.device)
+        output = F.conv3d(x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return output
+
+
 class ScaledConv2D(nn.Module):
     def __init__(self, inplanes, node):
         super(ScaledConv2D, self).__init__()
@@ -99,6 +120,19 @@ class ScaledConv2DSiLu(nn.Module):
         x = self.act(x)
         x = self.scale0(x)
         x = x * ori
+        return x
+
+
+class ScaledConv3D(nn.Module):
+    def __init__(self, inplanes, node):
+        super(ScaledConv3D, self).__init__()
+
+        self.act = getattr(F, node)
+        self.scale0 = BinaryConv3d(inplanes, inplanes, kernel_size=1, stride=1, padding=0, groups=inplanes, bias=False)
+
+    def forward(self, x):
+        x = self.act(x)
+        x = self.scale0(x)
         return x
 
 
@@ -146,6 +180,7 @@ class ShapeProp:
                 kwargs = load_arg(node.kwargs)
                 result = getattr(self_obj, node.target)(*args, **kwargs)
             elif node.op == 'call_module':
+                # import pdb; pdb.set_trace()
                 result = self.modules[node.target](*load_arg(node.args), **load_arg(node.kwargs))
 
             # This is the only code specific to shape propagation.
@@ -188,6 +223,7 @@ def is_suitable(node):
 
 def is_activate(model, node, node_list_activate):
     activate_names = ['relu', 'sigmoid', 'silu', 'hardtanh']
+
     if node.op == 'call_method':
         if node.target in activate_names:
             node_list_activate[node] = node.target
@@ -206,7 +242,7 @@ def is_activate(model, node, node_list_activate):
 
 
 def find_group_conv(model, node_input):
-    node_name = find_node_name(model, node_input, 'conv')
+    node_name = find_node_name(node_input, 'conv')
     conv_op = get_model_op(model, node_name)
     if not is_conv(conv_op):
         return False
@@ -228,23 +264,18 @@ def find_rm_node_in_depth(node, name_list_activate, depth=2):
     return False
 
 
-def find_node_name(model, node, name, prev=True):
+def find_node_name(node, name, prev=True):
     if prev:
         find_name = node.prev.name
         find_node = node.prev
     else:
         find_name = node.next.name
         find_node = node.next
-
     if name in find_name:
         return find_name
-    else:
-        node_op = get_model_op(model, find_name)
-        if is_conv(node_op) and name == 'conv':
-            return find_name
     if find_name == '':
         return ''
-    return find_node_name(model, find_node, name, prev=prev)
+    return find_node_name(find_node, name, prev=prev)
 
 
 def is_conv(op):
@@ -301,7 +332,6 @@ def add_binary_model(model, bn_names, input_shape=None):
     name_list_activate = {k.name: node_list_activate[k] for k in node_list_activate.keys()}
     for node in list(node_list_activate.keys()):
         for node_input in node.all_input_nodes:
-            # if find_group_conv(model, node_input) or find_conv_stride(model, node_input):
             if find_group_conv(model, node_input):
                 del node_list_activate[node]
         if find_rm_node_in_depth(node, name_list_activate, depth=2):
@@ -309,20 +339,18 @@ def add_binary_model(model, bn_names, input_shape=None):
     del name_list_activate
     if len(node_list_activate) == 0:
         print("Not found suitable node in model, which PaS not support!!")
-    print(node_list_activate)
+    # sample_list = {k: node_list_activate[k] for i, k in enumerate(node_list_activate) if i > 1}
+    # print(sample_list)
     for node in node_list_activate:
         try:
             inplanes = node.shape[1]
         except Exception as e:
             inplanes = node.prev.shape[1]
-        rm_conv_name = find_node_name(model, node, 'conv')
-        bn_names.append(rm_conv_name)
+        rm_name = find_node_name(node, 'conv')
+        bn_names.append(rm_name)
         active_name = node_list_activate[node]
         with fx_model.graph.inserting_after(node):
-            prev_conv_op = get_model_op(model, rm_conv_name)
-            if isinstance(prev_conv_op, nn.Conv3d):
-                relu_scaled_list.append(ScaledConv3D(inplanes, node_list_activate[node]))
-            elif node_list_activate[node] == 'silu':
+            if node_list_activate[node] == 'silu':
                 relu_scaled_list.append(ScaledConv2DSiLu(inplanes, node_list_activate[node]))
             else:
                 relu_scaled_list.append(ScaledConv2D(inplanes, node_list_activate[node]))

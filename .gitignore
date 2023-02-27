@@ -9,4 +9,4 @@ output
 __pycache__
 YOLOv6
 segmentation_unet
-video_classification_s2_1d/
+video_classification_s2_1d
