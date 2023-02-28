@@ -265,8 +265,11 @@ def find_rm_node_in_depth(node, name_list_activate, depth=2):
 
 
 def find_node_name(model, node, name, prev=True):
-    name_function = {'conv': is_conv, 'bn:': is_bn}
-
+    name_function = {'conv': is_conv, 'bn:': is_bn, 'batch_norm': is_bn}
+    current_name = node.name
+    node_op = get_model_op(model, current_name)
+    if name_function[name](node_op):
+        return current_name
     if prev:
         find_name = node.prev.name
         find_node = node.prev
@@ -418,6 +421,7 @@ def get_model_op(model, name):
                                 i += 1
                     except:
                         op = ''
+                        i += 1
                 elif i > length - 1:
                     break
                 else:

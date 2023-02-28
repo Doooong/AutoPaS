@@ -18,9 +18,9 @@ def get_rm_names(dbc_model, dbc_weights, bn_names):
     fx_model = fx.symbolic_trace(dbc_model)
     for node in fx_model.graph.nodes:
         if node.name in bn_names:
-            name = find_node_name(node, 'batch_norm', prev=False)
+            name = find_node_name(model=dbc_model,node=node, name='batch_norm', prev=False)
             if name == '':
-                remove_name[node.name] = {'name': find_node_name(node, 'bn', prev=False)}
+                remove_name[node.name] = {'name': find_node_name(dbc_model,node, 'bn', prev=False)}
             else:
                 remove_name[node.name] = {'name': name}
     idxes = []
