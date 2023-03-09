@@ -25,6 +25,10 @@ model_rebuild = rebuild_model(ori_model=net_ori, dbc_model=net, dbc_weights=weig
                               input_shape=[1, 3, 224, 224])
 
 ```
+## Not Support
+```python
+You may use nn.BatchNorm2d to replace torch.batch_norm
+```
 
 ## 流程简述
 add_binary_model
