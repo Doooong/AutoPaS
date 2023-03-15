@@ -1,14 +1,16 @@
 import random
+
+import numpy as np
 import torch.nn as nn
 import torch
-from .utils_pas import add_binary_model, ShapeProp
+from .utils_pas import add_binary_model, ShapeProp, get_model_op
 from .ptflops import get_flops_model
 import torch.fx as fx
 
 
 class PaS:
 
-    def __init__(self, model, input_shape, prune_ratio):
+    def __init__(self, model, input_shape, prune_ratio, sp_config=None):
         super().__init__()
         self.channel_list = []
         self.flop_list = []
@@ -18,6 +20,7 @@ class PaS:
         self.prune_ratio = prune_ratio
         self.input_shape = input_shape
         self.data_parallel = False
+        self.sp_config = sp_config
 
     def get_model_channel_flop(self):
         if len(self.channel_list) != 0:
@@ -47,9 +50,25 @@ class PaS:
             self.data_parallel = True
         # self.get_model_channel_flop()
         self.model, self.bn_names = add_binary_model(self.model, self.bn_names, self.input_shape)
-        # self.model = add_binary_model(self.model, self.bn_names, self.input_shape)
+        # self.init_dbc()
         self.init_dbc_weights()
         return self.model, self.bn_names
+
+    def init_dbc(self):
+        in_channel = []
+        out_channel = []
+        param_list = []
+        model_param_dict = {}
+        modify_param_dict = {}
+        for name, weight in self.model.named_parameters():
+            model_param_dict[name] = np.count_nonzero(weight.data.detach().cpu().numpy())
+        for name in self.bn_names:
+            sub_module = get_model_op(self.model, name)
+            in_channel.append(sub_module.in_channels)
+            out_channel.append(sub_module.out_channels)
+            param_list.append(np.count_nonzero(sub_module.weight.data.detach().cpu().numpy()))
+            modify_param_dict[name] = np.count_nonzero(sub_module.weight.data.detach().cpu().numpy())
+        print(1)
 
     def init_dbc_weights(self):
         for name, module in self.model.named_modules():

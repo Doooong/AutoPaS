@@ -90,21 +90,22 @@ def tp_rebuild(ori_model, remove_name, input_shape=None):
     DG.build_dependency(ori_model.eval(), example_inputs=example_input)
     for i, name in enumerate(remove_name.keys()):
         prune_op = get_model_op(ori_model, name)
-        bn_op = get_model_op(ori_model, remove_name[name]['name'])
+        # bn_op = get_model_op(ori_model, remove_name[name]['name'])
         if prune_op.weight.shape[0] == len(remove_name[name]['idx']):
-            prune_op.weight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
-            if bn_op:
-                bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
-                bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
-                bn_op.running_var.data = torch.zeros_like(bn_op.running_var.data).to(bn_op.running_var.data.device)
-                bn_op.bias.data = torch.zeros_like(bn_op.bias.data).to(bn_op.bias.data.device)
+            # prune_op.wxeight.data = torch.zeros_like(prune_op.weight.data).to(prune_op.weight.device)
+            # prune_op.bias = torch.nn.Parameter(torch.zeros_like(prune_op.bias.data))
+        #     if bn_op:
+        #         bn_op.weight.data = torch.zeros_like(bn_op.weight.data).to(bn_op.weight.device)
+        #         bn_op.running_mean.data = torch.zeros_like(bn_op.running_mean.data).to(bn_op.running_mean.data.device)
+        #         bn_op.running_var.data = torch.zeros_like(bn_op.running_var.data).to(bn_op.running_var.data.device)
+        #         bn_op.bias.data = torch.zeros_like(bn_op.bias.data).to(bn_op.bias.data.device)
             continue
         pruning_group = DG.get_pruning_group(prune_op,
                                              tp.prune_conv_out_channels, idxs=remove_name[name]['idx'])
         # 3. prune all grouped layer that is coupled with model.conv1
         if DG.check_pruning_group(pruning_group):
             pruning_group.exec()
-    ori_model = check_batch_norma(ori_model, remove_name)
+    # ori_model = check_batch_norma(ori_model, remove_name)
     return ori_model
 
 
